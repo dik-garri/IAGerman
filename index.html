@@ -14,8 +14,15 @@
   <main class="app">
     <header class="header">
       <h1 class="logo"><span>AI</span> German Dictionary</h1>
-      <button id="settingsBtn" class="icon-btn" aria-label="Настройки" title="Настройки">⚙️</button>
+      <div class="header__actions">
+        <button id="installBtn" class="btn btn--small" hidden>Установить</button>
+        <button id="settingsBtn" class="icon-btn" aria-label="Настройки" title="Настройки">⚙️</button>
+      </div>
     </header>
+
+    <p id="iosHint" class="ios-hint" hidden>
+      Чтобы установить: нажмите <b>Поделиться</b> ⬆️, затем <b>«На экран „Домой"»</b>.
+    </p>
 
     <form id="searchForm" class="search">
       <input

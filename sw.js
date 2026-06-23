@@ -1,4 +1,4 @@
-const CACHE = "de-dict-v4";
+const CACHE = "de-dict-v6";
 const ASSETS = [
   "./",
   "index.html",
@@ -12,7 +12,12 @@ const ASSETS = [
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
-  self.skipWaiting();
+  // НЕ вызываем skipWaiting автоматически — ждём подтверждения от страницы,
+  // чтобы показать баннер «Обновить». Активируем по сообщению ниже.
+});
+
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("activate", (e) => {

@@ -31,6 +31,38 @@ function getModel() {
 function setModel(v) {
   if (v) localStorage.setItem(MODEL_STORAGE, v);
 }
+
+/* ---------- Кэш переводов (экономия токенов) ---------- */
+const CACHE_STORAGE = "translation_cache";
+const CACHE_LIMIT = 500;
+
+function normWord(w) {
+  return w.trim().toLowerCase();
+}
+function readCache() {
+  try {
+    return JSON.parse(localStorage.getItem(CACHE_STORAGE) || "{}");
+  } catch {
+    return {};
+  }
+}
+function getCached(word) {
+  return readCache()[normWord(word)] || null;
+}
+function setCached(word, data) {
+  const cache = readCache();
+  cache[normWord(word)] = data;
+  // Ограничиваем размер: при переполнении убираем самые старые ключи.
+  const keys = Object.keys(cache);
+  if (keys.length > CACHE_LIMIT) {
+    for (const k of keys.slice(0, keys.length - CACHE_LIMIT)) delete cache[k];
+  }
+  try {
+    localStorage.setItem(CACHE_STORAGE, JSON.stringify(cache));
+  } catch {
+    /* квота localStorage переполнена — игнорируем */
+  }
+}
 function openKeyDialog() {
   keyInput.value = getKey();
   if (modelSelect) modelSelect.value = getModel();
@@ -231,6 +263,14 @@ form.addEventListener("submit", async (e) => {
   if (!word) return;
 
   hintEl.style.display = "none";
+
+  // Сначала смотрим в кэш — без обращения к API и трат токенов.
+  const cached = getCached(word);
+  if (cached) {
+    render(word, cached);
+    return;
+  }
+
   btn.disabled = true;
   showLoading();
 
@@ -238,6 +278,7 @@ form.addEventListener("submit", async (e) => {
     const data = await translate(word, (attempt, max) =>
       showLoading(`Модель занята, повтор ${attempt}/${max - 1}…`)
     );
+    setCached(word, data);
     render(word, data);
   } catch (err) {
     if (err && err.handled) {
@@ -256,9 +297,99 @@ window.addEventListener("load", () => {
   if (!getKey()) openKeyDialog();
 });
 
-/* ---------- Service worker (PWA) ---------- */
+/* ---------- Установка приложения (PWA) ---------- */
+const installBtn = $("#installBtn");
+const iosHint = $("#iosHint");
+let deferredPrompt = null;
+
+function isStandalone() {
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true
+  );
+}
+function isIOS() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+
+// Android/Chrome/Edge: ловим системное событие и показываем свою кнопку.
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  if (installBtn) installBtn.hidden = false;
+});
+
+if (installBtn) {
+  installBtn.addEventListener("click", async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    installBtn.hidden = true;
+  });
+}
+
+window.addEventListener("appinstalled", () => {
+  if (installBtn) installBtn.hidden = true;
+  deferredPrompt = null;
+});
+
+// iOS не поддерживает beforeinstallprompt — показываем инструкцию.
+window.addEventListener("load", () => {
+  if (isIOS() && !isStandalone() && iosHint) iosHint.hidden = false;
+});
+
+/* ---------- Service worker + обновление версии ---------- */
+function showUpdateBanner(reg) {
+  let banner = $("#updateBanner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "updateBanner";
+    banner.className = "update-banner";
+    banner.innerHTML =
+      '<span>Доступна новая версия</span><button id="updateBtn">Обновить</button>';
+    document.body.appendChild(banner);
+    $("#updateBtn").addEventListener("click", () => {
+      if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+    });
+  }
+  banner.hidden = false;
+}
+
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
+  window.addEventListener("load", async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("sw.js");
+
+      // Новая версия уже ждёт активации.
+      if (reg.waiting && navigator.serviceWorker.controller) showUpdateBanner(reg);
+
+      // Появился новый Service Worker.
+      reg.addEventListener("updatefound", () => {
+        const sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener("statechange", () => {
+          // Установился И есть активный контроллер => это обновление, а не первая установка.
+          if (sw.state === "installed" && navigator.serviceWorker.controller) {
+            showUpdateBanner(reg);
+          }
+        });
+      });
+
+      // Проверяем обновления при возврате на вкладку.
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") reg.update();
+      });
+    } catch {
+      /* SW недоступен — приложение всё равно работает */
+    }
+  });
+
+  // Когда новый SW взял управление — перезагружаем страницу один раз.
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloaded) return;
+    reloaded = true;
+    window.location.reload();
   });
 }
