@@ -1,9 +1,10 @@
 "use strict";
 
 const KEY_STORAGE = "gemini_api_key";
-const MODEL = "gemini-2.0-flash";
-const API_URL = (key) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(key)}`;
+const MODEL_STORAGE = "gemini_model";
+const DEFAULT_MODEL = "gemini-2.5-flash";
+const API_URL = (model, key) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
 
 const $ = (sel) => document.querySelector(sel);
 const form = $("#searchForm");
@@ -15,6 +16,7 @@ const settingsBtn = $("#settingsBtn");
 const keyDialog = $("#keyDialog");
 const keyForm = $("#keyForm");
 const keyInput = $("#keyInput");
+const modelSelect = $("#modelSelect");
 
 /* ---------- API key handling ---------- */
 function getKey() {
@@ -23,20 +25,24 @@ function getKey() {
 function setKey(v) {
   if (v) localStorage.setItem(KEY_STORAGE, v);
 }
+function getModel() {
+  return localStorage.getItem(MODEL_STORAGE) || DEFAULT_MODEL;
+}
+function setModel(v) {
+  if (v) localStorage.setItem(MODEL_STORAGE, v);
+}
 function openKeyDialog() {
   keyInput.value = getKey();
+  if (modelSelect) modelSelect.value = getModel();
   keyDialog.showModal();
 }
 
 settingsBtn.addEventListener("click", openKeyDialog);
-keyForm.addEventListener("submit", (e) => {
-  // method="dialog" handles closing; persist on "save"
-  if (keyDialog.returnValue !== "cancel") {
-    setKey(keyInput.value.trim());
-  }
-});
 keyDialog.addEventListener("close", () => {
-  if (keyDialog.returnValue === "save") setKey(keyInput.value.trim());
+  if (keyDialog.returnValue === "save") {
+    setKey(keyInput.value.trim());
+    if (modelSelect) setModel(modelSelect.value);
+  }
 });
 
 /* ---------- Gemini request ---------- */
@@ -94,7 +100,7 @@ async function translate(word) {
     },
   };
 
-  const res = await fetch(API_URL(key), {
+  const res = await fetch(API_URL(getModel(), key), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -108,6 +114,10 @@ async function translate(word) {
     } catch (_) {}
     if (res.status === 400 || res.status === 403) {
       msg = "Неверный или недействительный API-ключ. Проверьте его в настройках ⚙️.";
+    } else if (res.status === 429) {
+      msg =
+        "Превышена квота для текущей модели (для бесплатного тарифа она может быть равна 0). " +
+        "Откройте настройки ⚙️ и выберите другую модель — обычно помогает gemini-2.5-flash-lite или gemini-2.0-flash-lite.";
     }
     throw new Error(msg);
   }

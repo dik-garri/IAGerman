@@ -53,6 +53,18 @@
         <li>Скопируйте ключ и вставьте сюда</li>
       </ol>
       <input id="keyInput" class="dialog__input" type="password" placeholder="AIza…" autocomplete="off" />
+
+      <label class="dialog__label" for="modelSelect">Модель</label>
+      <select id="modelSelect" class="dialog__input">
+        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+        <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+        <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+        <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</option>
+      </select>
+      <p class="dialog__text" style="margin-top:-8px">
+        Если на вашем ключе квота модели = 0 (ошибка 429), попробуйте вариант <b>-lite</b>.
+      </p>
+
       <div class="dialog__actions">
         <button value="cancel" class="btn btn--ghost" formnovalidate>Отмена</button>
         <button id="saveKeyBtn" value="save" class="btn">Сохранить</button>

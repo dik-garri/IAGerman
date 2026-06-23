@@ -244,6 +244,8 @@ body {
   margin-bottom: 18px;
 }
 .dialog__input:focus { border-color: var(--accent); }
+.dialog__label { display: block; font-size: 0.9rem; color: var(--muted); margin: 0 0 6px; }
+select.dialog__input { appearance: none; cursor: pointer; }
 .dialog__actions { display: flex; gap: 10px; justify-content: flex-end; }
 .btn {
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
