@@ -83,7 +83,9 @@ const SYSTEM_PROMPT = `Ты — двуязычный русско-немецки
 - Если слово не существует или это бессмыслица — поставь notFound=true.
 Отвечай строго в формате заданной JSON-схемы, без пояснений.`;
 
-async function translate(word) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function translate(word, onRetry) {
   const key = getKey();
   if (!key) {
     openKeyDialog();
@@ -100,11 +102,26 @@ async function translate(word) {
     },
   };
 
-  const res = await fetch(API_URL(getModel(), key), {
+  const url = API_URL(getModel(), key);
+  const reqInit = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  };
+
+  // Повторяем при временной недоступности (503) и перегрузке (429).
+  const MAX_ATTEMPTS = 4;
+  let res;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    res = await fetch(url, reqInit);
+    if (res.ok) break;
+    if ((res.status === 503 || res.status === 429) && attempt < MAX_ATTEMPTS) {
+      onRetry?.(attempt, MAX_ATTEMPTS);
+      await sleep(800 * attempt); // 0.8s, 1.6s, 2.4s
+      continue;
+    }
+    break;
+  }
 
   if (!res.ok) {
     let msg = `Ошибка ${res.status}`;
@@ -118,6 +135,10 @@ async function translate(word) {
       msg =
         "Превышена квота для текущей модели (для бесплатного тарифа она может быть равна 0). " +
         "Откройте настройки ⚙️ и выберите другую модель — обычно помогает gemini-2.5-flash-lite или gemini-2.0-flash-lite.";
+    } else if (res.status === 503) {
+      msg =
+        "Модель сейчас перегружена и не ответила после нескольких попыток. " +
+        "Подождите немного или выберите другую модель в настройках ⚙️.";
     }
     throw new Error(msg);
   }
@@ -189,8 +210,8 @@ function render(word, d) {
     </div>`;
 }
 
-function showLoading() {
-  resultEl.innerHTML = `<div class="status"><div class="spinner"></div><span>Перевожу…</span></div>`;
+function showLoading(text = "Перевожу…") {
+  resultEl.innerHTML = `<div class="status"><div class="spinner"></div><span>${esc(text)}</span></div>`;
 }
 
 function showError(message) {
@@ -214,7 +235,9 @@ form.addEventListener("submit", async (e) => {
   showLoading();
 
   try {
-    const data = await translate(word);
+    const data = await translate(word, (attempt, max) =>
+      showLoading(`Модель занята, повтор ${attempt}/${max - 1}…`)
+    );
     render(word, data);
   } catch (err) {
     if (err && err.handled) {
