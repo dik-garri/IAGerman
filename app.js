@@ -256,10 +256,51 @@ function showError(message) {
   if (b) b.addEventListener("click", openKeyDialog);
 }
 
-/* ---------- Form submit ---------- */
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const word = input.value.trim();
+/* ---------- Список последних слов ---------- */
+const RECENTS_STORAGE = "recent_words";
+const RECENTS_LIMIT = 30;
+const recentsEl = $("#recents");
+
+function getRecents() {
+  try {
+    return JSON.parse(localStorage.getItem(RECENTS_STORAGE) || "[]");
+  } catch {
+    return [];
+  }
+}
+function pushRecent(word) {
+  const w = word.trim();
+  if (!w) return;
+  const norm = w.toLowerCase();
+  const list = getRecents().filter((x) => x.toLowerCase() !== norm);
+  list.unshift(w);
+  localStorage.setItem(RECENTS_STORAGE, JSON.stringify(list.slice(0, RECENTS_LIMIT)));
+  renderRecents();
+}
+function renderRecents() {
+  if (!recentsEl) return;
+  const list = getRecents();
+  if (!list.length) {
+    recentsEl.hidden = true;
+    recentsEl.innerHTML = "";
+    return;
+  }
+  recentsEl.hidden = false;
+  recentsEl.innerHTML = list
+    .map((w) => `<button class="chip" type="button">${esc(w)}</button>`)
+    .join("");
+}
+
+recentsEl?.addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  input.value = chip.textContent;
+  runTranslate(chip.textContent);
+});
+
+/* ---------- Перевод ---------- */
+async function runTranslate(word) {
+  word = word.trim();
   if (!word) return;
 
   hintEl.style.display = "none";
@@ -268,6 +309,7 @@ form.addEventListener("submit", async (e) => {
   const cached = getCached(word);
   if (cached) {
     render(word, cached);
+    pushRecent(word);
     return;
   }
 
@@ -280,6 +322,7 @@ form.addEventListener("submit", async (e) => {
     );
     setCached(word, data);
     render(word, data);
+    pushRecent(word);
   } catch (err) {
     if (err && err.handled) {
       resultEl.innerHTML = "";
@@ -290,10 +333,16 @@ form.addEventListener("submit", async (e) => {
   } finally {
     btn.disabled = false;
   }
+}
+
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  runTranslate(input.value);
 });
 
 /* ---------- First run: ask for key ---------- */
 window.addEventListener("load", () => {
+  renderRecents();
   if (!getKey()) openKeyDialog();
 });
 

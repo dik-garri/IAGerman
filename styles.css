@@ -159,6 +159,25 @@ body {
 .search__btn:hover { transform: translateY(-1px); }
 .search__btn:disabled { opacity: 0.6; cursor: default; transform: none; }
 
+.recents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -8px 0 22px;
+}
+.chip {
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 0.92rem;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+}
+.chip:hover { border-color: var(--accent); }
+.chip:active { transform: scale(0.96); }
+
 .result { display: grid; gap: 14px; }
 
 .card {
