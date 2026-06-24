@@ -32,6 +32,54 @@ function setModel(v) {
   if (v) localStorage.setItem(MODEL_STORAGE, v);
 }
 
+/* ---------- Язык подписей интерфейса ---------- */
+const LANG_STORAGE = "label_lang";
+function getLang() {
+  return localStorage.getItem(LANG_STORAGE) || "ru";
+}
+function setLang(v) {
+  if (v) localStorage.setItem(LANG_STORAGE, v);
+}
+const LABELS = {
+  ru: {
+    translation: "Перевод",
+    meanings: "Ещё значения",
+    article: "Артикль",
+    singular: "Единственное число",
+    plural: "Множественное число",
+    genitive: "Родительный падеж",
+    infinitive: "Начальная форма",
+    stammformen: "Основные формы",
+    auxiliary: "Вспом. глагол",
+    present: "Präsens",
+    comparison: "Сравнение",
+    noun: "Существительное",
+    verb: "Глагол",
+    adjective: "Прилагательное",
+    other: "Слово",
+    loading: "Перевожу…",
+  },
+  de: {
+    translation: "Übersetzung",
+    meanings: "Weitere Bedeutungen",
+    article: "Artikel",
+    singular: "Singular",
+    plural: "Plural",
+    genitive: "Genitiv",
+    infinitive: "Grundform",
+    stammformen: "Stammformen",
+    auxiliary: "Hilfsverb",
+    present: "Präsens",
+    comparison: "Steigerung",
+    noun: "Substantiv",
+    verb: "Verb",
+    adjective: "Adjektiv",
+    other: "Wort",
+    loading: "Übersetze…",
+  },
+};
+const L = () => LABELS[getLang()] || LABELS.ru;
+
 /* ---------- Кэш переводов (экономия токенов) ---------- */
 const CACHE_STORAGE = "translation_cache";
 const CACHE_LIMIT = 500;
@@ -83,6 +131,8 @@ function renderFieldsList() {
 function openKeyDialog() {
   keyInput.value = getKey();
   if (modelSelect) modelSelect.value = getModel();
+  const langSel = document.getElementById("langSelect");
+  if (langSel) langSel.value = getLang();
   renderFieldsList();
   keyDialog.showModal();
 }
@@ -101,10 +151,14 @@ keyDialog.addEventListener("close", () => {
   if (keyDialog.returnValue === "save") {
     setKey(keyInput.value.trim());
     if (modelSelect) setModel(modelSelect.value);
+    const langSel = document.getElementById("langSelect");
+    if (langSel) setLang(langSel.value);
     const checks = keyDialog.querySelectorAll("#fieldsList input[data-field]");
     const fields = {};
     checks.forEach((c) => (fields[c.dataset.field] = c.checked));
     setFields(fields);
+    // Применяем смену языка подписей к уже показанному результату.
+    if (lastResult) render(lastResult.word, lastResult.d);
   }
 });
 
@@ -278,13 +332,8 @@ async function translate(word, onRetry) {
 }
 
 /* ---------- Rendering ---------- */
-const POS_LABEL = {
-  noun: "Существительное",
-  verb: "Глагол",
-  adjective: "Прилагательное",
-  other: "Слово",
-};
 const DIR_LABEL = { "ru-de": "RU → DE", "de-ru": "DE → RU" };
+const posLabel = (pos) => L()[pos] || L().other;
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -305,7 +354,10 @@ function row(label, value, valueClass = "") {
   return `<div class="row"><div class="row__label">${esc(label)}</div><div class="row__value ${valueClass}">${esc(value)}</div></div>`;
 }
 
+let lastResult = null;
+
 function render(word, d) {
+  lastResult = { word, d };
   if (d.notFound) {
     resultEl.innerHTML = `
       <div class="error">
@@ -322,27 +374,28 @@ function render(word, d) {
   const list = (arr) =>
     Array.isArray(arr) && arr.length ? arr.map(esc).join(", ") : "";
 
-  let rows = row("Перевод", d.translation);
-  if (d.meanings) rows += row("Ещё значения", list(d.meanings));
+  const t = L();
+  let rows = row(t.translation, d.translation);
+  if (d.meanings) rows += row(t.meanings, list(d.meanings));
 
   if (d.partOfSpeech === "noun") {
     const cls = articleClass(d.article);
-    if (d.article) rows += row("Артикль", d.article, "art " + cls);
-    rows += row("Единственное число", d.singular || d.translation);
-    rows += row("Множественное число", d.plural);
-    rows += row("Родительный падеж", d.genitive);
+    if (d.article) rows += row(t.article, d.article, "art " + cls);
+    rows += row(t.singular, d.singular || d.translation);
+    rows += row(t.plural, d.plural);
+    rows += row(t.genitive, d.genitive);
   } else if (d.partOfSpeech === "verb") {
-    rows += row("Начальная форма", d.infinitive);
+    rows += row(t.infinitive, d.infinitive);
     if (d.praeteritum || d.partizip2) {
       const parts = [d.infinitive, d.praeteritum, d.partizip2].filter(Boolean).join(" – ");
-      rows += row("Основные формы", parts);
+      rows += row(t.stammformen, parts);
     }
-    rows += row("Вспом. глагол", d.auxiliary);
-    rows += row("Präsens", list(d.present));
+    rows += row(t.auxiliary, d.auxiliary);
+    rows += row(t.present, list(d.present));
   } else if (d.partOfSpeech === "adjective") {
     if (d.comparative || d.superlative) {
       const parts = [d.translation, d.comparative, d.superlative].filter(Boolean).join(" – ");
-      rows += row("Сравнение", parts);
+      rows += row(t.comparison, parts);
     }
   }
 
@@ -357,7 +410,7 @@ function render(word, d) {
     <div class="card">
       <div class="card__head">
         <span class="word">${esc(word)}</span>
-        <span class="pos">${esc(POS_LABEL[d.partOfSpeech] || "Слово")}</span>
+        <span class="pos">${esc(posLabel(d.partOfSpeech))}</span>
         <span class="dir">${esc(DIR_LABEL[d.direction] || "")}</span>
         <button class="refresh" id="refreshBtn" title="Перевести заново" aria-label="Перевести заново">↻</button>
       </div>
@@ -368,8 +421,8 @@ function render(word, d) {
   if (rb) rb.addEventListener("click", () => runTranslate(word, { force: true }));
 }
 
-function showLoading(text = "Перевожу…") {
-  resultEl.innerHTML = `<div class="status"><div class="spinner"></div><span>${esc(text)}</span></div>`;
+function showLoading(text) {
+  resultEl.innerHTML = `<div class="status"><div class="spinner"></div><span>${esc(text || L().loading)}</span></div>`;
 }
 
 function showError(message) {
