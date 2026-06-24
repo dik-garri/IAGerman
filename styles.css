@@ -289,6 +289,12 @@ body {
   padding: 16px 18px;
   border-radius: var(--radius);
 }
+.error__row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  justify-content: space-between;
+}
 .error button {
   margin-top: 10px;
   background: transparent;

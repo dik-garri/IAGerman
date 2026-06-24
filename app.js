@@ -211,7 +211,15 @@ function row(label, value, valueClass = "") {
 
 function render(word, d) {
   if (d.notFound) {
-    resultEl.innerHTML = `<div class="error">Не удалось распознать слово «${esc(word)}». Проверьте написание.</div>`;
+    resultEl.innerHTML = `
+      <div class="error">
+        <div class="error__row">
+          <span>Не удалось распознать «${esc(word)}». Проверьте написание.</span>
+          <button class="refresh" id="refreshBtn" title="Перевести заново" aria-label="Перевести заново">↻</button>
+        </div>
+      </div>`;
+    const rb = $("#refreshBtn");
+    if (rb) rb.addEventListener("click", () => runTranslate(word, { force: true }));
     return;
   }
 
