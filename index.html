@@ -47,32 +47,36 @@
     </p>
   </main>
 
-  <!-- Диалог настройки ключа -->
+  <!-- Диалог настроек -->
   <dialog id="keyDialog" class="dialog">
     <form method="dialog" class="dialog__form" id="keyForm">
-      <h2>API-ключ Gemini</h2>
-      <p class="dialog__text">
-        Приложение работает без сервера, поэтому нужен ваш бесплатный ключ Gemini.
-        Он хранится только на этом устройстве (в браузере) и никуда не отправляется,
-        кроме самого Google.
-      </p>
-      <ol class="dialog__steps">
-        <li>Откройте <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">aistudio.google.com/app/apikey</a></li>
-        <li>Нажмите «Create API key» (бесплатно)</li>
-        <li>Скопируйте ключ и вставьте сюда</li>
-      </ol>
-      <input id="keyInput" class="dialog__input" type="password" placeholder="AIza…" autocomplete="off" />
+      <h2>Настройки</h2>
 
-      <label class="dialog__label" for="modelSelect">Модель</label>
+      <label class="dialog__label" for="keyInput">
+        API-ключ Gemini
+        <button type="button" class="info" data-help="keyHelp" aria-label="Как получить ключ">ⓘ</button>
+      </label>
+      <input id="keyInput" class="dialog__input" type="password" placeholder="AIza…" autocomplete="off" />
+      <div id="keyHelp" class="help" hidden>
+        Ключ хранится только на этом устройстве и отправляется лишь в Google.
+        Получить бесплатно:
+        <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">aistudio.google.com/app/apikey</a>
+        → «Create API key».
+      </div>
+
+      <label class="dialog__label" for="modelSelect">
+        Модель
+        <button type="button" class="info" data-help="modelHelp" aria-label="О выборе модели">ⓘ</button>
+      </label>
       <select id="modelSelect" class="dialog__input">
         <option value="gemini-2.5-flash">gemini-2.5-flash</option>
         <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
         <option value="gemini-2.0-flash">gemini-2.0-flash</option>
         <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</option>
       </select>
-      <p class="dialog__text" style="margin-top:-8px">
-        Если на вашем ключе квота модели = 0 (ошибка 429), попробуйте вариант <b>-lite</b>.
-      </p>
+      <div id="modelHelp" class="help" hidden>
+        Если ошибка 429 (квота = 0 на вашем ключе) — выберите вариант <b>-lite</b>.
+      </div>
 
       <div class="dialog__actions">
         <button value="cancel" class="btn btn--ghost" formnovalidate>Отмена</button>

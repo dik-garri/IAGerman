@@ -70,6 +70,15 @@ function openKeyDialog() {
 }
 
 settingsBtn.addEventListener("click", openKeyDialog);
+
+// Раскрытие подсказок ⓘ рядом с полями.
+keyDialog.addEventListener("click", (e) => {
+  const info = e.target.closest(".info");
+  if (!info) return;
+  const help = document.getElementById(info.dataset.help);
+  if (help) help.hidden = !help.hidden;
+});
+
 keyDialog.addEventListener("close", () => {
   if (keyDialog.returnValue === "save") {
     setKey(keyInput.value.trim());

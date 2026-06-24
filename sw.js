@@ -1,4 +1,4 @@
-const CACHE = "de-dict-v9";
+const CACHE = "de-dict-v10";
 const ASSETS = [
   "./",
   "index.html",
