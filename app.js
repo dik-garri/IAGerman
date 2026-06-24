@@ -236,10 +236,13 @@ function render(word, d) {
         <span class="word">${esc(word)}</span>
         <span class="pos">${esc(POS_LABEL[d.partOfSpeech] || "Слово")}</span>
         <span class="dir">${esc(DIR_LABEL[d.direction] || "")}</span>
+        <button class="refresh" id="refreshBtn" title="Перевести заново" aria-label="Перевести заново">↻</button>
       </div>
       ${rows}
       ${example}
     </div>`;
+  const rb = $("#refreshBtn");
+  if (rb) rb.addEventListener("click", () => runTranslate(word, { force: true }));
 }
 
 function showLoading(text = "Перевожу…") {
@@ -299,18 +302,21 @@ recentsEl?.addEventListener("click", (e) => {
 });
 
 /* ---------- Перевод ---------- */
-async function runTranslate(word) {
+async function runTranslate(word, { force = false } = {}) {
   word = word.trim();
   if (!word) return;
 
   hintEl.style.display = "none";
 
   // Сначала смотрим в кэш — без обращения к API и трат токенов.
-  const cached = getCached(word);
-  if (cached) {
-    render(word, cached);
-    pushRecent(word);
-    return;
+  // При force=true пропускаем кэш и переводим заново.
+  if (!force) {
+    const cached = getCached(word);
+    if (cached) {
+      render(word, cached);
+      pushRecent(word);
+      return;
+    }
   }
 
   btn.disabled = true;
