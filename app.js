@@ -39,6 +39,10 @@ const CACHE_LIMIT = 500;
 function normWord(w) {
   return w.trim().toLowerCase();
 }
+// Ключ кэша включает набор включённых полей: при смене настроек — свежий ответ.
+function cacheKey(word) {
+  return normWord(word) + "@" + fieldsSig();
+}
 function readCache() {
   try {
     return JSON.parse(localStorage.getItem(CACHE_STORAGE) || "{}");
@@ -47,11 +51,11 @@ function readCache() {
   }
 }
 function getCached(word) {
-  return readCache()[normWord(word)] || null;
+  return readCache()[cacheKey(word)] || null;
 }
 function setCached(word, data) {
   const cache = readCache();
-  cache[normWord(word)] = data;
+  cache[cacheKey(word)] = data;
   // Ограничиваем размер: при переполнении убираем самые старые ключи.
   const keys = Object.keys(cache);
   if (keys.length > CACHE_LIMIT) {
@@ -63,9 +67,23 @@ function setCached(word, data) {
     /* квота localStorage переполнена — игнорируем */
   }
 }
+function renderFieldsList() {
+  const box = document.getElementById("fieldsList");
+  if (!box) return;
+  const f = getFields();
+  box.innerHTML = FIELD_DEFS.map(
+    (d) => `
+    <label class="field-toggle">
+      <input type="checkbox" data-field="${d.key}" ${f[d.key] ? "checked" : ""} />
+      <span>${d.label}</span>
+    </label>`
+  ).join("");
+}
+
 function openKeyDialog() {
   keyInput.value = getKey();
   if (modelSelect) modelSelect.value = getModel();
+  renderFieldsList();
   keyDialog.showModal();
 }
 
@@ -83,46 +101,114 @@ keyDialog.addEventListener("close", () => {
   if (keyDialog.returnValue === "save") {
     setKey(keyInput.value.trim());
     if (modelSelect) setModel(modelSelect.value);
+    const checks = keyDialog.querySelectorAll("#fieldsList input[data-field]");
+    const fields = {};
+    checks.forEach((c) => (fields[c.dataset.field] = c.checked));
+    setFields(fields);
   }
 });
 
+/* ---------- Настройки детализации ответа ---------- */
+const FIELDS_STORAGE = "display_fields";
+// Порядок = порядок отображения и список чекбоксов в настройках.
+const FIELD_DEFS = [
+  { key: "genitive",   label: "Родительный падеж (Genitiv)" },
+  { key: "verbForms",  label: "Формы глагола (gehen–ging–gegangen)" },
+  { key: "present",    label: "Спряжение в Präsens" },
+  { key: "comparison", label: "Степени сравнения" },
+  { key: "meanings",   label: "Несколько значений / синонимы" },
+  { key: "examples",   label: "Примеры с переводом" },
+];
+const DEFAULT_FIELDS = Object.fromEntries(FIELD_DEFS.map((f) => [f.key, true]));
+
+function getFields() {
+  try {
+    return { ...DEFAULT_FIELDS, ...JSON.parse(localStorage.getItem(FIELDS_STORAGE) || "{}") };
+  } catch {
+    return { ...DEFAULT_FIELDS };
+  }
+}
+function setFields(obj) {
+  localStorage.setItem(FIELDS_STORAGE, JSON.stringify(obj));
+}
+// Подпись активных полей — для разделения кэша при разных настройках.
+function fieldsSig() {
+  const f = getFields();
+  return FIELD_DEFS.filter((d) => f[d.key]).map((d) => d.key).join(",");
+}
+
 /* ---------- Gemini request ---------- */
-const RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
+const S = (type) => ({ type });
+const ARR = { type: "array", items: { type: "string" } };
+
+function buildSchema(f) {
+  const props = {
     detectedLanguage: { type: "string", enum: ["ru", "de"] },
     direction: { type: "string", enum: ["ru-de", "de-ru"] },
-    partOfSpeech: {
-      type: "string",
-      enum: ["noun", "verb", "adjective", "other"],
-    },
-    translation: { type: "string" },
-    // существительные
-    article: { type: "string" },          // der / die / das (или "")
-    singular: { type: "string" },         // напр. das Haus
-    plural: { type: "string" },           // напр. die Häuser
-    // глаголы
-    infinitive: { type: "string" },       // начальная форма
-    // вспомогательное
-    example: { type: "string" },          // короткий пример (опционально)
-    notFound: { type: "boolean" },        // слово не распознано
-  },
-  required: ["partOfSpeech", "translation", "notFound"],
-};
+    partOfSpeech: { type: "string", enum: ["noun", "verb", "adjective", "other"] },
+    translation: S("string"),
+    article: S("string"),
+    singular: S("string"),
+    plural: S("string"),
+    infinitive: S("string"),
+    notFound: S("boolean"),
+  };
+  if (f.genitive) props.genitive = S("string");
+  if (f.verbForms) {
+    props.praeteritum = S("string");
+    props.partizip2 = S("string");
+    props.auxiliary = S("string");
+  }
+  if (f.present) props.present = ARR;
+  if (f.comparison) {
+    props.comparative = S("string");
+    props.superlative = S("string");
+  }
+  if (f.meanings) props.meanings = ARR;
+  if (f.examples) {
+    props.example = S("string");
+    props.exampleRu = S("string");
+  }
+  return {
+    type: "object",
+    properties: props,
+    required: ["partOfSpeech", "translation", "notFound"],
+  };
+}
 
-const SYSTEM_PROMPT = `Ты — двуязычный русско-немецкий словарь.
-Тебе дают одно слово на русском ИЛИ немецком языке. Определи язык автоматически.
-Если слово русское — переведи на немецкий. Если немецкое — переведи на русский.
-
-Правила заполнения полей:
-- partOfSpeech: noun (существительное), verb (глагол), adjective (прилагательное) или other.
-- translation: основной перевод. Для существительного, переведённого на немецкий, ВКЛЮЧИ артикль (напр. "das Haus").
-- Для существительных всегда заполни: article (der/die/das — немецкий артикль), singular (немецкое слово в ед. числе с артиклем), plural (немецкое слово во мн. числе с артиклем, напр. "die Häuser"). Если перевод с немецкого на русский — артикль и формы бери для немецкого слова.
-- Для глаголов заполни infinitive — начальную форму немецкого глагола (инфинитив).
-- Для прилагательных артикль/формы не нужны.
-- example: один короткий пример употребления на немецком (по желанию).
-- Если слово не существует или это бессмыслица — поставь notFound=true.
-Отвечай строго в формате заданной JSON-схемы, без пояснений.`;
+function buildPrompt(f) {
+  const lines = [
+    "Ты — двуязычный русско-немецкий словарь.",
+    "Тебе дают одно слово на русском ИЛИ немецком языке. Определи язык автоматически.",
+    "Если слово русское — переведи на немецкий. Если немецкое — переведи на русский.",
+    "",
+    "Правила заполнения полей:",
+    "- partOfSpeech: noun, verb, adjective или other.",
+    '- translation: основной перевод. Для существительного на немецком ВКЛЮЧИ артикль (напр. "das Haus").',
+    "- Для существительных всегда заполни: article (der/die/das), singular (с артиклем), plural (с артиклем). Формы относятся к немецкому слову.",
+    "- Для глаголов заполни infinitive — инфинитив немецкого глагола.",
+  ];
+  if (f.genitive) lines.push('- genitive: форма родительного падежа существительного (напр. "des Hauses").');
+  if (f.verbForms)
+    lines.push(
+      "- Для глаголов: praeteritum (3-е л. ед.ч. Präteritum, напр. \"ging\"), partizip2 (Partizip II, напр. \"gegangen\"), auxiliary (вспомогательный глагол \"haben\" или \"sein\")."
+    );
+  if (f.present)
+    lines.push(
+      '- present: спряжение немецкого глагола в Präsens, массив из 6 строк ("ich gehe", "du gehst", "er/sie/es geht", "wir gehen", "ihr geht", "sie/Sie gehen").'
+    );
+  if (f.comparison)
+    lines.push('- Для прилагательных: comparative (напр. "schneller") и superlative (напр. "am schnellsten").');
+  if (f.meanings)
+    lines.push("- meanings: 2–4 других варианта перевода/синонима на языке перевода (если есть), иначе пустой массив.");
+  if (f.examples)
+    lines.push(
+      "- example: короткий пример употребления на немецком; exampleRu: его перевод на русский."
+    );
+  lines.push("- Если слово не существует или это бессмыслица — поставь notFound=true.");
+  lines.push("Заполняй только релевантные части речи поля. Отвечай строго в формате JSON-схемы, без пояснений.");
+  return lines.join("\n");
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -133,13 +219,14 @@ async function translate(word, onRetry) {
     throw { handled: true };
   }
 
+  const fields = getFields();
   const body = {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    systemInstruction: { parts: [{ text: buildPrompt(fields) }] },
     contents: [{ role: "user", parts: [{ text: word }] }],
     generationConfig: {
       temperature: 0.2,
       responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
+      responseSchema: buildSchema(fields),
     },
   };
 
@@ -232,20 +319,39 @@ function render(word, d) {
     return;
   }
 
+  const list = (arr) =>
+    Array.isArray(arr) && arr.length ? arr.map(esc).join(", ") : "";
+
   let rows = row("Перевод", d.translation);
+  if (d.meanings) rows += row("Ещё значения", list(d.meanings));
 
   if (d.partOfSpeech === "noun") {
     const cls = articleClass(d.article);
     if (d.article) rows += row("Артикль", d.article, "art " + cls);
     rows += row("Единственное число", d.singular || d.translation);
     rows += row("Множественное число", d.plural);
+    rows += row("Родительный падеж", d.genitive);
   } else if (d.partOfSpeech === "verb") {
     rows += row("Начальная форма", d.infinitive);
+    if (d.praeteritum || d.partizip2) {
+      const parts = [d.infinitive, d.praeteritum, d.partizip2].filter(Boolean).join(" – ");
+      rows += row("Основные формы", parts);
+    }
+    rows += row("Вспом. глагол", d.auxiliary);
+    rows += row("Präsens", list(d.present));
+  } else if (d.partOfSpeech === "adjective") {
+    if (d.comparative || d.superlative) {
+      const parts = [d.translation, d.comparative, d.superlative].filter(Boolean).join(" – ");
+      rows += row("Сравнение", parts);
+    }
   }
 
-  const example = d.example
-    ? `<div class="example">«${esc(d.example)}»</div>`
-    : "";
+  const example =
+    d.example
+      ? `<div class="example">«${esc(d.example)}»${
+          d.exampleRu ? `<span class="example__ru">${esc(d.exampleRu)}</span>` : ""
+        }</div>`
+      : "";
 
   resultEl.innerHTML = `
     <div class="card">

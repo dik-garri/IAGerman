@@ -258,10 +258,41 @@ body {
 .art--das { color: var(--das); }
 
 .example {
-  margin-top: 4px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
   color: var(--muted);
   font-style: italic;
   font-size: 0.98rem;
+}
+.example__ru {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  color: var(--text);
+  opacity: 0.85;
+}
+
+.fields {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 18px;
+}
+.field-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.95rem;
+  color: var(--text);
+  padding: 7px 4px;
+  cursor: pointer;
+}
+.field-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex: 0 0 auto;
 }
 
 .hint { color: var(--muted); font-size: 0.92rem; text-align: center; margin-top: 26px; }
