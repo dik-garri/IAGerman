@@ -48,3 +48,7 @@ python3 -m http.server 8080
 Изменить ключ можно в любой момент кнопкой ⚙️.
 
 Модель: `gemini-2.0-flash` (бесплатный тариф).
+
+---
+
+[Все проекты →](https://dik-garri.github.io/garry/)
