@@ -69,13 +69,21 @@
         <button type="button" class="info" data-help="modelHelp" aria-label="О выборе модели">ⓘ</button>
       </label>
       <select id="modelSelect" class="dialog__input">
-        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+        <option value="auto">авто (перебор моделей)</option>
+        <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
+        <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
         <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
-        <option value="gemini-2.0-flash">gemini-2.0-flash</option>
         <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</option>
+        <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+        <option value="gemini-3.6-flash">gemini-3.6-flash</option>
+        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+        <option value="gemini-2.0-flash">gemini-2.0-flash</option>
       </select>
       <div id="modelHelp" class="help" hidden>
-        Если ошибка 429 (квота = 0 на вашем ключе) — выберите вариант <b>-lite</b>.
+        В режиме <b>авто</b> модели перебираются по очереди: если одна упёрлась
+        в квоту (429) или не ответила, запрос уходит следующей. Приложение
+        запоминает, какие модели сбоили, и в следующий раз начинает со здоровых.
+        Выбор конкретной модели просто ставит её первой в этой очереди.
       </div>
 
       <label class="dialog__label" for="langSelect">Язык подписей</label>

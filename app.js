@@ -2,9 +2,28 @@
 
 const KEY_STORAGE = "gemini_api_key";
 const MODEL_STORAGE = "gemini_model";
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const AUTO_MODEL = "auto";
+const DEFAULT_MODEL = AUTO_MODEL;
 const API_URL = (model, key) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+
+// Цепочка фолбэка: у каждой модели свой бесплатный дневной лимит,
+// поэтому перебор и переживает ошибки, и расширяет суммарную квоту.
+// Сначала дешёвые lite-модели, потом обычные flash (актуально на 08.2026).
+const FALLBACK_MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-3.6-flash",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+];
+// Один перевод никогда не перебирает больше моделей, чем это число.
+const MAX_MODEL_ATTEMPTS = 5;
+// Таймаут на одну модель: тормозящую лучше бросить и взять следующую.
+const MODEL_TIMEOUT_MS = 25000;
 
 const $ = (sel) => document.querySelector(sel);
 const form = $("#searchForm");
@@ -30,6 +49,57 @@ function getModel() {
 }
 function setModel(v) {
   if (v) localStorage.setItem(MODEL_STORAGE, v);
+}
+
+/* ---------- Память об отказах моделей ---------- */
+// Запоминаем, какие модели упираются в лимит или отваливаются, и в следующий
+// раз пробуем сначала здоровые. Счётчики протухают, чтобы модель с исчерпанной
+// на сегодня квотой вернулась в начало цепочки.
+const FAIL_STORAGE = "gemini_model_fails";
+const FAIL_TTL_MS = 60 * 60 * 1000; // 1 час
+
+function modelFails() {
+  let s;
+  try {
+    s = JSON.parse(localStorage.getItem(FAIL_STORAGE) || "{}");
+  } catch (_) {
+    return {};
+  }
+  const now = Date.now();
+  const fresh = {};
+  for (const [m, rec] of Object.entries(s)) {
+    if (rec && typeof rec === "object" && now - (rec.ts || 0) < FAIL_TTL_MS) fresh[m] = rec;
+  }
+  return fresh;
+}
+function saveFails(s) {
+  try {
+    localStorage.setItem(FAIL_STORAGE, JSON.stringify(s));
+  } catch (_) {}
+}
+// weight > 1 — для фатальных для модели ошибок (её просто нет на ключе),
+// чтобы такая модель ушла в самый конец цепочки.
+function bumpModelFail(m, weight = 1) {
+  const s = modelFails();
+  s[m] = { n: (s[m]?.n || 0) + weight, ts: Date.now() };
+  saveFails(s);
+}
+function clearModelFail(m) {
+  const s = modelFails();
+  if (s[m]) {
+    delete s[m];
+    saveFails(s);
+  }
+}
+// Порядок перебора: выбранная в настройках модель первой (если это не "auto"),
+// дальше — цепочка, отсортированная по числу недавних отказов.
+function orderedModels(preferred) {
+  const s = modelFails();
+  const chain = [...FALLBACK_MODELS].sort((a, b) => (s[a]?.n || 0) - (s[b]?.n || 0));
+  if (preferred && preferred !== AUTO_MODEL) {
+    return [preferred, ...chain.filter((m) => m !== preferred)];
+  }
+  return chain;
 }
 
 /* ---------- Язык подписей интерфейса ---------- */
@@ -266,7 +336,7 @@ function buildPrompt(f) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function translate(word, onRetry) {
+async function translate(word, onFallback) {
   const key = getKey();
   if (!key) {
     openKeyDialog();
@@ -284,51 +354,84 @@ async function translate(word, onRetry) {
     },
   };
 
-  const url = API_URL(getModel(), key);
-  const reqInit = {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  };
+  const payload = JSON.stringify(body);
+  const models = orderedModels(getModel()).slice(0, MAX_MODEL_ATTEMPTS);
 
-  // Повторяем при временной недоступности (503) и перегрузке (429).
-  const MAX_ATTEMPTS = 4;
-  let res;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    res = await fetch(url, reqInit);
-    if (res.ok) break;
-    if ((res.status === 503 || res.status === 429) && attempt < MAX_ATTEMPTS) {
-      onRetry?.(attempt, MAX_ATTEMPTS);
-      await sleep(800 * attempt); // 0.8s, 1.6s, 2.4s
+  let sawRateLimit = false;
+  let sawOverload = false;
+  let lastMsg = "";
+
+  for (let i = 0; i < models.length; i++) {
+    const model = models[i];
+    if (i > 0) {
+      onFallback?.(model, i + 1, models.length);
+      await sleep(300);
+    }
+
+    let res;
+    try {
+      res = await fetch(API_URL(model, key), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+        signal: AbortSignal.timeout ? AbortSignal.timeout(MODEL_TIMEOUT_MS) : undefined,
+      });
+    } catch (err) {
+      // Таймаут или сеть — пробуем следующую модель.
+      console.warn(model + ":", err);
+      bumpModelFail(model);
+      lastMsg = "Нет связи с API Gemini. Проверьте интернет.";
       continue;
     }
-    break;
-  }
 
-  if (!res.ok) {
-    let msg = `Ошибка ${res.status}`;
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      let parsed = null;
+      try {
+        if (text) parsed = JSON.parse(text);
+      } catch (_) {}
+      if (parsed) {
+        clearModelFail(model);
+        return parsed;
+      }
+      // Ответ пустой или не-JSON — это каприз конкретной модели.
+      console.warn(model + ": пустой или некорректный ответ");
+      bumpModelFail(model);
+      lastMsg = "Модель вернула пустой ответ.";
+      continue;
+    }
+
+    let detail = "";
     try {
       const err = await res.json();
-      if (err?.error?.message) msg = err.error.message;
+      detail = err?.error?.message || "";
     } catch (_) {}
-    if (res.status === 400 || res.status === 403) {
-      msg = "Неверный или недействительный API-ключ. Проверьте его в настройках ⚙️.";
-    } else if (res.status === 429) {
-      msg =
-        "Превышена квота для текущей модели (для бесплатного тарифа она может быть равна 0). " +
-        "Откройте настройки ⚙️ и выберите другую модель — обычно помогает gemini-2.5-flash-lite или gemini-2.0-flash-lite.";
-    } else if (res.status === 503) {
-      msg =
-        "Модель сейчас перегружена и не ответила после нескольких попыток. " +
-        "Подождите немного или выберите другую модель в настройках ⚙️.";
+    console.warn(model + ": HTTP " + res.status, detail);
+
+    // Ключ заблокирован или недействителен — другие модели не помогут.
+    if (res.status === 403 || (res.status === 400 && /api[ _-]?key/i.test(detail))) {
+      throw new Error("Неверный или недействительный API-ключ. Проверьте его в настройках ⚙️.");
     }
-    throw new Error(msg);
+
+    if (res.status === 429) sawRateLimit = true;
+    if (res.status === 500 || res.status === 503) sawOverload = true;
+    // 404 — такой модели на ключе нет; 400 — она не приняла запрос.
+    // Отправляем её в конец цепочки, чтобы не тратить на неё время впредь.
+    bumpModelFail(model, res.status === 404 || res.status === 400 ? 5 : 1);
+    lastMsg = detail || `Ошибка ${res.status}`;
   }
 
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Пустой ответ от модели. Попробуйте ещё раз.");
-  return JSON.parse(text);
+  if (sawRateLimit) {
+    throw new Error(
+      "Квота исчерпана у всех моделей из цепочки. Подождите немного " +
+        "или укажите другую модель в настройках ⚙️."
+    );
+  }
+  if (sawOverload) {
+    throw new Error("Модели сейчас перегружены и не ответили. Попробуйте ещё раз через минуту.");
+  }
+  throw new Error(lastMsg || "Не удалось получить ответ ни от одной модели.");
 }
 
 /* ---------- Rendering ---------- */
@@ -499,8 +602,8 @@ async function runTranslate(word, { force = false } = {}) {
   showLoading();
 
   try {
-    const data = await translate(word, (attempt, max) =>
-      showLoading(`Модель занята, повтор ${attempt}/${max - 1}…`)
+    const data = await translate(word, (model, attempt, max) =>
+      showLoading(`Модель занята, пробую ${model} (${attempt}/${max})…`)
     );
     setCached(word, data);
     render(word, data);
