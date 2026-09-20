@@ -21,9 +21,10 @@ const FALLBACK_MODELS = [
   "gemini-2.0-flash",
 ];
 // Один перевод никогда не перебирает больше моделей, чем это число.
-const MAX_MODEL_ATTEMPTS = 5;
+const MAX_MODEL_ATTEMPTS = 4;
 // Таймаут на одну модель: тормозящую лучше бросить и взять следующую.
-const MODEL_TIMEOUT_MS = 25000;
+// Словарная статья — это пара сотен токенов, дольше 12 с ждать нечего.
+const MODEL_TIMEOUT_MS = 12000;
 
 const $ = (sel) => document.querySelector(sel);
 const form = $("#searchForm");
@@ -56,7 +57,8 @@ function setModel(v) {
 // раз пробуем сначала здоровые. Счётчики протухают, чтобы модель с исчерпанной
 // на сегодня квотой вернулась в начало цепочки.
 const FAIL_STORAGE = "gemini_model_fails";
-const FAIL_TTL_MS = 60 * 60 * 1000; // 1 час
+const FAIL_TTL_MS = 60 * 60 * 1000; // 1 час — временные сбои и квоты
+const HARD_FAIL_TTL_MS = 24 * 60 * 60 * 1000; // сутки — модели нет на ключе
 
 function modelFails() {
   let s;
@@ -68,7 +70,9 @@ function modelFails() {
   const now = Date.now();
   const fresh = {};
   for (const [m, rec] of Object.entries(s)) {
-    if (rec && typeof rec === "object" && now - (rec.ts || 0) < FAIL_TTL_MS) fresh[m] = rec;
+    if (!rec || typeof rec !== "object") continue;
+    const ttl = rec.hard ? HARD_FAIL_TTL_MS : FAIL_TTL_MS;
+    if (now - (rec.ts || 0) < ttl) fresh[m] = rec;
   }
   return fresh;
 }
@@ -77,11 +81,11 @@ function saveFails(s) {
     localStorage.setItem(FAIL_STORAGE, JSON.stringify(s));
   } catch (_) {}
 }
-// weight > 1 — для фатальных для модели ошибок (её просто нет на ключе),
-// чтобы такая модель ушла в самый конец цепочки.
-function bumpModelFail(m, weight = 1) {
+// hard — модель не просто сбойнула, а недоступна на этом ключе (404/400):
+// такую отправляем в конец цепочки и помним сутки, а не час.
+function bumpModelFail(m, hard = false) {
   const s = modelFails();
-  s[m] = { n: (s[m]?.n || 0) + weight, ts: Date.now() };
+  s[m] = { n: (s[m]?.n || 0) + (hard ? 5 : 1), ts: Date.now(), hard: hard || !!s[m]?.hard };
   saveFails(s);
 }
 function clearModelFail(m) {
@@ -91,6 +95,23 @@ function clearModelFail(m) {
     saveFails(s);
   }
 }
+// Модели, не понимающие generationConfig.thinkingConfig: помним их отдельно и
+// без TTL — это свойство модели, а не временный сбой.
+const NOTHINK_STORAGE = "gemini_no_thinking_cfg";
+function thinkingCfgRejected(m) {
+  try {
+    return (JSON.parse(localStorage.getItem(NOTHINK_STORAGE) || "[]") || []).includes(m);
+  } catch (_) {
+    return false;
+  }
+}
+function markThinkingCfgRejected(m) {
+  try {
+    const list = JSON.parse(localStorage.getItem(NOTHINK_STORAGE) || "[]") || [];
+    if (!list.includes(m)) localStorage.setItem(NOTHINK_STORAGE, JSON.stringify([...list, m]));
+  } catch (_) {}
+}
+
 // Порядок перебора: выбранная в настройках модель первой (если это не "auto"),
 // дальше — цепочка, отсортированная по числу недавних отказов.
 function orderedModels(preferred) {
@@ -334,9 +355,7 @@ function buildPrompt(f) {
   return lines.join("\n");
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function translate(word, onFallback) {
+async function translate(word, onProgress) {
   const key = getKey();
   if (!key) {
     openKeyDialog();
@@ -344,17 +363,26 @@ async function translate(word, onFallback) {
   }
 
   const fields = getFields();
+  const generationConfig = {
+    temperature: 0.2,
+    responseMimeType: "application/json",
+    responseSchema: buildSchema(fields),
+  };
   const body = {
     systemInstruction: { parts: [{ text: buildPrompt(fields) }] },
     contents: [{ role: "user", parts: [{ text: word }] }],
-    generationConfig: {
-      temperature: 0.2,
-      responseMimeType: "application/json",
-      responseSchema: buildSchema(fields),
-    },
+    generationConfig,
   };
 
-  const payload = JSON.stringify(body);
+  // Словарная статья не требует рассуждений, а «мышление» — основной источник
+  // задержки у flash-моделей. Гасим его там, где модель это поле принимает.
+  const payloadFor = (model) =>
+    JSON.stringify(
+      thinkingCfgRejected(model)
+        ? body
+        : { ...body, generationConfig: { ...generationConfig, thinkingConfig: { thinkingBudget: 0 } } }
+    );
+
   const models = orderedModels(getModel()).slice(0, MAX_MODEL_ATTEMPTS);
 
   let sawRateLimit = false;
@@ -363,26 +391,25 @@ async function translate(word, onFallback) {
 
   for (let i = 0; i < models.length; i++) {
     const model = models[i];
-    if (i > 0) {
-      onFallback?.(model, i + 1, models.length);
-      await sleep(300);
-    }
+    onProgress?.(model, i + 1, models.length);
 
     let res;
+    const startedAt = Date.now();
     try {
       res = await fetch(API_URL(model, key), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: payload,
+        body: payloadFor(model),
         signal: AbortSignal.timeout ? AbortSignal.timeout(MODEL_TIMEOUT_MS) : undefined,
       });
     } catch (err) {
       // Таймаут или сеть — пробуем следующую модель.
-      console.warn(model + ":", err);
+      console.warn(`${model}: ${Date.now() - startedAt} ms,`, err);
       bumpModelFail(model);
       lastMsg = "Нет связи с API Gemini. Проверьте интернет.";
       continue;
     }
+    console.debug(`${model}: HTTP ${res.status} за ${Date.now() - startedAt} ms`);
 
     if (res.ok) {
       const data = await res.json().catch(() => null);
@@ -409,6 +436,13 @@ async function translate(word, onFallback) {
     } catch (_) {}
     console.warn(model + ": HTTP " + res.status, detail);
 
+    // Модель не знает про thinkingConfig — запоминаем и повторяем её же без него.
+    if (res.status === 400 && /thinking/i.test(detail) && !thinkingCfgRejected(model)) {
+      markThinkingCfgRejected(model);
+      i--;
+      continue;
+    }
+
     // Ключ заблокирован или недействителен — другие модели не помогут.
     if (res.status === 403 || (res.status === 400 && /api[ _-]?key/i.test(detail))) {
       throw new Error("Неверный или недействительный API-ключ. Проверьте его в настройках ⚙️.");
@@ -418,7 +452,7 @@ async function translate(word, onFallback) {
     if (res.status === 500 || res.status === 503) sawOverload = true;
     // 404 — такой модели на ключе нет; 400 — она не приняла запрос.
     // Отправляем её в конец цепочки, чтобы не тратить на неё время впредь.
-    bumpModelFail(model, res.status === 404 || res.status === 400 ? 5 : 1);
+    bumpModelFail(model, res.status === 404 || res.status === 400);
     lastMsg = detail || `Ошибка ${res.status}`;
   }
 
@@ -603,7 +637,11 @@ async function runTranslate(word, { force = false } = {}) {
 
   try {
     const data = await translate(word, (model, attempt, max) =>
-      showLoading(`Модель занята, пробую ${model} (${attempt}/${max})…`)
+      showLoading(
+        attempt === 1
+          ? `${L().loading} (${model})`
+          : `Предыдущая модель не ответила, пробую ${model} (${attempt}/${max})…`
+      )
     );
     setCached(word, data);
     render(word, data);
